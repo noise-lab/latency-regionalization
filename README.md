@@ -4,6 +4,8 @@
 
 SCRIBE is the research codebase for the paper [**"Beyond Data Points: Regionalizing Crowdsourced Latency Measurements"**](https://dl.acm.org/doi/10.1145/3700416) (ACM SIGMETRICS 2025). It turns sparse, unevenly distributed crowdsourced broadband measurements into coherent geographic regions that summarize latency performance — enabling policymakers and researchers to reason about internet equity at a regional rather than point-measurement level.
 
+> **Note on data sources:** The original research was conducted using [Ookla](https://www.ookla.com/ookla-for-good) speed test data, which is available only under a Data Use Agreement and cannot be redistributed. This repository demonstrates the same approach using [M-Lab NDT](https://www.measurementlab.net/tests/ndt/) data, which is openly available via BigQuery.
+
 ## Motivation
 
 Large-scale crowdsourced measurement platforms (e.g., M-Lab, Ookla) generate millions of broadband performance measurements, but those measurements are spatially uneven: dense in urban cores, sparse in suburban and rural areas. Naive spatial aggregation over administrative boundaries (ZIP codes, census tracts) conflates areas with fundamentally different performance. SCRIBE addresses this by:
