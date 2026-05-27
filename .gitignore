@@ -160,3 +160,17 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# uv
+.venv/
+uv.lock
+
+# Pipeline data (stored under /data/taveesh/scribe, not in repo)
+# The data/ directory in the repo contains only committed assets (cities.geojson).
+# Exclude any large files that may accidentally land here.
+data/raw/
+data/interpolated/
+data/aggregated/
+data/output/
+*.parquet
+*.gpkg

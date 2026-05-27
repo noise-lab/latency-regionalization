@@ -1,142 +1,108 @@
-from h3 import h3
+import h3
 import geopandas as gpd
 from shapely.geometry import Polygon, Point
 import numpy as np
 
-def create_hexagon_around_point(h3_resolution, point):
-    """
-    Creates a hexagon around a point.
 
-    Args:
-        h3_resolution (int): H3 resolution level
-        point (shapely.geometry.Point): Point around which the hexagon is to be created
+def _boundary_to_polygon(cell: str) -> Polygon:
+    """Convert an H3 cell to a Shapely Polygon.
+
+    h3.cell_to_boundary() returns (lat, lng) pairs; Shapely expects (lng, lat).
+    """
+    return Polygon([(lng, lat) for lat, lng in h3.cell_to_boundary(cell)])
+
+
+def create_hexagon_around_point(h3_resolution: int, point: Point) -> Polygon:
+    cell = h3.latlng_to_cell(point.y, point.x, h3_resolution)
+    return _boundary_to_polygon(cell)
+
+
+def assign_hex_ids(
+    data: gpd.GeoDataFrame, h3_resolution: int
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    """Assign H3 cell IDs to each point in data.
 
     Returns:
-        shapely.geometry.Polygon: Hexagon around the point
+        data: input GeoDataFrame with added hex_id and hex_centroid columns.
+        hdf: GeoDataFrame of unique hexagon polygons keyed by hex_id.
     """
-    hexagon_vertices = h3.h3_to_geo_boundary(h3.geo_to_h3(point.y, point.x, h3_resolution))
-    hexagon_polygon = Polygon(hexagon_vertices)
-    return hexagon_polygon
-
-def assign_hex_ids(data, h3_resolution):
-    """
-    Assigns H3 hexagon IDs to data points and calculates distances from centroids.
-
-    Args:
-        data (gpd.GeoDataFrame): GeoDataFrame containing the data points
-        h3_resolution (int): H3 resolution level
-
-    Returns:
-        gpd.GeoDataFrame: GeoDataFrame with hexagon IDs and distances from centroids
-    """
-    hexagons = []
-    for _, row in data.iterrows():
-        hexagon_polygon = create_hexagon_around_point(h3_resolution, row['geometry'],)
-        hex_ids = h3.polyfill({'type': 'Polygon', 'coordinates': [list(hexagon_polygon.exterior.coords)]}, h3_resolution)
-        hexagons.extend(hex_ids)
-
-    data['hex_id'] = hexagons
-    data['hex_centroid'] = data['hex_id'].apply(lambda x: Point(h3.h3_to_geo(x)))
-    # data['distance_from_centroid'] = data.apply(lambda x: x['geometry'].distance(x['hex_centroid']), axis=1)
-    hdf = gpd.GeoDataFrame(data['hex_id'], geometry=[Polygon(h3.h3_to_geo_boundary(h, geo_json=True)) for h in hexagons])
+    cells = [
+        h3.latlng_to_cell(row.geometry.y, row.geometry.x, h3_resolution)
+        for _, row in data.iterrows()
+    ]
+    data = data.copy()
+    data["hex_id"] = cells
+    data["hex_centroid"] = data["hex_id"].apply(
+        lambda c: Point(h3.cell_to_latlng(c)[1], h3.cell_to_latlng(c)[0])
+    )
+    hdf = gpd.GeoDataFrame(
+        {"hex_id": cells},
+        geometry=[_boundary_to_polygon(c) for c in cells],
+        crs="EPSG:4326",
+    )
     return data, hdf
 
-def containment_filter(h3_cell, points):
-    """ Filter points within a hexagon
 
-    Args:
-        h3_cell (str): H3 cell ID
-        points (gpd.GeoDataFrame): GeoDataFrame containing the points to filter
-
-    Returns:
-        gpd.GeoDataFrame: GeoDataFrame containing the points within the hexagon
-    """
-    boundary_vertices = h3.h3_to_geo_boundary(h3_cell, True)
-    vlist = list(map(Point, boundary_vertices))
-    bdf = gpd.GeoDataFrame(geometry=vlist, crs="EPSG:4326")
-    polygon = Polygon(boundary_vertices)
+def containment_filter(h3_cell: str, points: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Return points that fall within an H3 cell."""
+    polygon = _boundary_to_polygon(h3_cell)
     points = points.to_crs("EPSG:4326")
-    return points[points.geometry.apply(lambda x: x.within(polygon))]
+    return points[points.geometry.apply(lambda p: p.within(polygon))]
 
-def containment_filter_generic(bdry, points):
-    """ Filter points within a polygon
 
-    Args:
-        bdry (gpd.GeoDataFrame): GeoDataFrame containing the boundary polygon
-        points (gpd.GeoDataFrame): GeoDataFrame containing the points to filter
-
-    Returns:
-        gpd.GeoDataFrame: GeoDataFrame containing the points within the polygon
-    """
-    polygon = bdry.geometry[0]
+def containment_filter_generic(
+    bdry: gpd.GeoDataFrame, points: gpd.GeoDataFrame
+) -> gpd.GeoDataFrame:
+    """Return points that fall within a polygon boundary GeoDataFrame."""
+    polygon = bdry.geometry.iloc[0]
     points = points.to_crs(bdry.crs)
-    return points[points.geometry.apply(lambda x: x.within(polygon))]
+    return points[points.geometry.apply(lambda p: p.within(polygon))]
 
-def generate_grid_points(h3_cell, epsg, grid_spacing):
-    """ Generate grid points within a hexagon
 
-    Args:
-        h3_cell (str): H3 cell ID
-        epsg (int): EPSG code for the coordinate reference system
-        grid_spacing (float): Spacing between grid points
-
-    Returns:
-        np.array: x-coordinates of grid points
-        np.array: y-coordinates of grid points
-    """
-    boundary_vertices = h3.h3_to_geo_boundary(h3_cell, True)
-    vlist = list(map(Point, boundary_vertices))
-    bdf = gpd.GeoDataFrame(geometry=vlist, crs="EPSG:4326")
-    bdf = bdf.to_crs(epsg)
+def generate_grid_points(
+    h3_cell: str, epsg: int, grid_spacing: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Generate a grid of points inside an H3 cell in a projected CRS."""
+    boundary_vertices = [(lng, lat) for lat, lng in h3.cell_to_boundary(h3_cell)]
+    bdf = gpd.GeoDataFrame(
+        geometry=[Point(v) for v in boundary_vertices], crs="EPSG:4326"
+    ).to_crs(epsg)
     converted_vertices = list(bdf.geometry)
 
-    # Get bounding box
-    min_lon = min([v.x for v in converted_vertices])
-    max_lon = max([v.x for v in converted_vertices])
-    min_lat = min([v.y for v in converted_vertices])
-    max_lat = max([v.y for v in converted_vertices])
+    min_x = min(v.x for v in converted_vertices)
+    max_x = max(v.x for v in converted_vertices)
+    min_y = min(v.y for v in converted_vertices)
+    max_y = max(v.y for v in converted_vertices)
 
-    # Convert boundary vertices to polygon for containment check as we're dealing with a hexagon (some grid points will be out of bounds)
-    # This is also done to compute test data points within the hexagon.
+    polygon = Polygon([(v.x, v.y) for v in converted_vertices])
 
-    polygon = Polygon(converted_vertices)
-    poly_df = gpd.GeoDataFrame(geometry=[polygon], crs=epsg)
+    xs = np.arange(min_x, max_x, grid_spacing)
+    ys = np.arange(min_y, max_y, grid_spacing)
+    grid = [(x, y) for x in xs for y in ys if Point(x, y).within(polygon)]
 
-    lons = np.arange(min_lon, max_lon, grid_spacing)
-    lats = np.arange(min_lat, max_lat, grid_spacing)
-    grid_points = np.array([(lon, lat) for lon in lons for lat in lats])
+    if not grid:
+        return np.array([]), np.array([])
 
-    valid_grid_points = [point for point in grid_points if Point(point).within(polygon)]
+    grid_x = np.array([p[0] for p in grid])
+    grid_y = np.array([p[1] for p in grid])
+    return grid_x, grid_y
 
-    grid_hex_x = np.array([point[0] for point in valid_grid_points])
-    grid_hex_y = np.array([point[1] for point in valid_grid_points])
-    
-    return grid_hex_x, grid_hex_y
 
-def generate_grid_over_data(data, epsg, grid_spacing, shapefile):
-    """ Generate grid points over a region using its bounding box
+def generate_grid_over_data(
+    epsg: int, grid_spacing: float, shapefile: str
+) -> tuple[np.ndarray, np.ndarray]:
+    """Generate a grid of points over a region defined by a shapefile."""
+    bdry = gpd.read_file(shapefile).to_crs(epsg)
+    min_x, min_y, max_x, max_y = bdry.total_bounds
+    polygon = bdry.geometry.iloc[0]
 
-    Args:
-        data (gpd.GeoDataFrame): GeoDataFrame containing the data points (not needed anymore. using shapefile instead)
-        epsg (int): EPSG code for the coordinate reference system
-        grid_spacing (float): Spacing between grid points
+    xs = np.arange(min_x, max_x, grid_spacing)
+    ys = np.arange(min_y, max_y, grid_spacing)
+    grid = [(x, y) for x in xs for y in ys if Point(x, y).within(polygon)]
 
-    Returns:
-        np.array: x-coordinates of grid points
-        np.array: y-coordinates of grid points
-    """
-    bdry = gpd.read_file(shapefile, crs="EPSG:4326")
-    bdry = bdry.to_crs(epsg)
-    # Get bounding box
-    min_lon, min_lat, max_lon, max_lat = bdry.total_bounds
+    if not grid:
+        return np.array([]), np.array([])
 
-    lons = np.arange(min_lon, max_lon, grid_spacing)
-    lats = np.arange(min_lat, max_lat, grid_spacing)
-    grid_points = np.array([(lon, lat) for lon in lons for lat in lats])
-
-    valid_grid_points = [point for point in grid_points if Point(point).within(bdry.geometry[0])]
-
-    grid_x = np.array([point[0] for point in valid_grid_points])
-    grid_y = np.array([point[1] for point in valid_grid_points])
-    
+    grid_x = np.array([p[0] for p in grid])
+    grid_y = np.array([p[1] for p in grid])
     return grid_x, grid_y
